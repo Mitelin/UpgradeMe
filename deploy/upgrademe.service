@@ -1,0 +1,26 @@
+[Unit]
+Description=UpgradeMe video quality inventory
+After=network-online.target
+Wants=network-online.target
+# Add RequiresMountsFor=/your/media/mount before deployment.
+
+[Service]
+Type=simple
+User=upgrademe
+Group=upgrademe
+WorkingDirectory=/opt/upgrademe
+Environment=TZ=Europe/Prague
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 /opt/upgrademe/upgrademe.py --host 127.0.0.1 --port 5066 --data-dir /var/lib/upgrademe
+StateDirectory=upgrademe
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=60
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
