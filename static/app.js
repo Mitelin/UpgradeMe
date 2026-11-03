@@ -60,7 +60,10 @@ function scanButtonLabel(active, pending = false) {
   if (active) return 'Sken probíhá…';
   return pending ? 'Spouštění skenu…' : '↻ Skenovat nyní';
 }
-if (typeof module !== 'undefined' && module.exports) module.exports = {parentFolder, buildGroups, compareEntries, filterByRoots, reconcileRootSelection, isBelowThreshold, counted, scanButtonLabel};
+function folderSearchUrl(name) {
+  return 'https://sktorrent.eu/torrent/torrents_v2.php?' + new URLSearchParams({search: name});
+}
+if (typeof module !== 'undefined' && module.exports) module.exports = {parentFolder, buildGroups, compareEntries, filterByRoots, reconcileRootSelection, isBelowThreshold, counted, scanButtonLabel, folderSearchUrl};
 if (typeof document !== 'undefined') {
 const $ = id => document.getElementById(id);
 const collator = new Intl.Collator('cs', {numeric: true, sensitivity: 'base'});
@@ -218,6 +221,14 @@ function render() {
     edit.dataset.focusKey = 'folder:' + e.path;
     edit.setAttribute('aria-label', 'Výjimka složky: ' + e.path);
     exceptionCell.append(node('span', e.exceptionCount ? `Výjimka ${e.exceptionCount}/${e.files.length}` : 'Bez výjimky', 'exception-status' + (e.exceptionCount ? ' has-exception' : '')), edit);
+    const search = node('a', 'Hledat na SKTorrentu', 'folder-search');
+    search.href = folderSearchUrl(e.name);
+    search.target = '_blank'; search.rel = 'noopener noreferrer';
+    search.dataset.focusKey = 'search:' + e.path;
+    search.setAttribute('aria-label', 'Hledat na SKTorrentu: ' + e.name + ' (nová karta)');
+    search.title = 'Vyhledat „' + e.name + '“ v nové kartě';
+    search.addEventListener('click', event => event.stopPropagation());
+    exceptionCell.append(search);
     summary.append(title, resolution, node('span', bytes(e.size), 'size'), exceptionCell);
     details.append(summary);
     e.files.sort(compare).forEach(f => details.append(row(f)));

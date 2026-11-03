@@ -1,6 +1,25 @@
 const {test} = require('node:test');
 const assert = require('node:assert/strict');
-const {parentFolder, buildGroups, compareEntries, filterByRoots, reconcileRootSelection, isBelowThreshold, counted, scanButtonLabel} = require('../static/app.js');
+const {parentFolder, buildGroups, compareEntries, filterByRoots, reconcileRootSelection, isBelowThreshold, counted, scanButtonLabel, folderSearchUrl} = require('../static/app.js');
+test('folder search matches the requested site and encodes the whole name as one query', () => {
+  assert.equal(folderSearchUrl('aa'), 'https://sktorrent.eu/torrent/torrents_v2.php?search=aa');
+  for (const name of ['Film (2024)', 'Žluťoučký kůň', 'A & B + C #1?', 'https://example.invalid/?x=1&search=other']) {
+    const url = new URL(folderSearchUrl(name));
+    assert.equal(url.origin, 'https://sktorrent.eu');
+    assert.equal(url.pathname, '/torrent/torrents_v2.php');
+    assert.equal(url.searchParams.get('search'), name);
+    assert.equal(url.searchParams.size, 1);
+    assert.equal(url.hash, '');
+  }
+});
+test('folder search uses the displayed movie or series name, not a server path or episode', () => {
+  const groups = buildGroups([
+    file('/media/Film (2024)/video.mkv'),
+    file('/media/Show/Season 1/S01E01.mkv', 576, 100, null, '/media/Show')
+  ]);
+  assert.deepEqual(groups.map(group => new URL(folderSearchUrl(group.name)).searchParams.get('search')),
+    ['Film (2024)', 'Show']);
+});
 test('scan label follows active scans, including scheduled runs and stopping', () => {
   assert.equal(scanButtonLabel(null), '↻ Skenovat nyní');
   assert.equal(scanButtonLabel(null, true), 'Spouštění skenu…');
