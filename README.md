@@ -1,6 +1,6 @@
 # UpgradeMe
 
-Samostatný, pouze čtecí přehled kvality video knihovny. Python 3.10+ a `ffprobe` z FFmpeg, bez Python balíčků, CDN, telemetrie či externích API. České UI, SQLite a denní inkrementální sken v **05:00 podle časové zóny serveru**.
+Samostatný, pouze čtecí přehled kvality video knihovny. Python 3.10+ a `ffprobe` z FFmpeg, bez Python balíčků, CDN, telemetrie či externích API. České UI, SQLite a denní inkrementální sken v **05:00 podle časové zóny serveru**, nebo na Linuxu sken navazující na **Media Maintenance**.
 
 ## Co umí
 
@@ -63,6 +63,30 @@ Tyto kroky jsou návod pro nasazení, nikoli tvrzení, že služba už byla na s
 
 Scheduler běží uvnitř aplikace. Jednou denně od 05:00 zahájí automatický sken; po pozdním startu doplní dnešní zmeškaný sken. Běžící skeny se nepřekrývají. Denní pokus se eviduje i při chybě, další pokus lze spustit ručně. Vypnutý server se sám neprobudí. Jednu datovou složku chrání zámek proti souběhu dvou instancí.
 
+### Napojení na Media Maintenance (Linux/systemd)
+
+Web běží trvale, sken se spouští po skončení služby údržby **i při jejím selhání nebo timeoutu**. Na dokončení samostatného Jellyfin refresh se v tomto režimu **nečeká**. Zámek chrání vzájemný souběh UpgradeMe a maintenance služby, nikoli nezávislé úlohy Jellyfinu nebo jiných aplikací.
+
+1. V `ExecStart` služby UpgradeMe přidejte:
+
+   ```text
+   --maintenance-trigger /var/lib/upgrademe/maintenance.json --shared-scan-lock /var/lib/upgrademe/media-maintenance.lock
+   ```
+
+   Tyto volby **nahrazují** vlastní rozvrh v 05:00; nepřidávají druhý časovač. UI místo času zobrazuje „Po údržbě“.
+
+2. Před spuštěním obou služeb připravte `/var/lib/upgrademe` s právy pro oba procesy. Na media serveru obě služby běží jako `mitelin`; pokud používáte oddělené účty, nastavte společnou skupinu a práva pro zámek i signál. Soubor zámku nikdy za provozu nemažte ani nenahrazujte.
+
+3. Šablonu [media-transfer-maintenance.conf](deploy/media-transfer-maintenance.conf) nainstalujte jako `/etc/systemd/system/media-transfer-maintenance.service.d/upgrademe.conf`. Upravte cestu k existujícímu maintenance skriptu i instalaci UpgradeMe podle serveru. Drop-in obalí dosavadní `ExecStart` pomocí `flock`; samotný maintenance skript, jeho časovač i konfigurace zůstávají beze změny.
+
+4. `ExecStopPost` volá [notify_maintenance.py](deploy/notify_maintenance.py), který atomicky uloží identifikátor dokončeného běhu a `SERVICE_RESULT`. Funguje i při zastaveném webu UpgradeMe. Po `systemctl daemon-reload` zapněte UpgradeMe; kvůli instalaci není nutné spouštět skutečnou údržbu.
+
+Scheduler kontroluje signál po 20 sekundách. Každý dokončený běh vyvolá jeden pokus o sken; několik běhů během odstávky webu se sloučí do jednoho aktuálního skenu. Identifikátor se v databázi potvrdí až po skončení skenu, takže přerušený sken nebo čekání se po restartu zopakuje. Chybný signál se hlásí v logu a nesmí se potichu ignorovat.
+
+Automatický **i ruční** sken drží stejný OS zámek po celou dobu práce. Pokud běží údržba, UI oznámí čekání; pokud skenuje UpgradeMe, údržba počká. Existující timeout maintenance služby se nemění a zahrnuje i toto čekání. Přímé spuštění jejího skriptu mimo systemd drop-in zámek obchází, proto používejte časovač nebo stávající tlačítko Media Maintenance.
+
+Na homepage lze přidat běžný odkaz na port 5066 a `siteMonitor` na LAN adresu. Odkaz není autentizace; službu zpřístupňujte jen v důvěryhodné LAN / VPN.
+
 ## Data a testy
 
 Nastavení, výjimky, cache a výsledky skenů jsou v `runtime/upgrademe.sqlite3` (nebo `--data-dir`). Pro zálohu zastavte službu a zkopírujte celý datový adresář. Zdrojové soubory nepřesouvá, nemaže a nevytváří u nich sidecary.
@@ -76,5 +100,7 @@ Testy seskupování a řazení UI (potřebují Node.js pouze pro testování, ni
 ```sh
 node --test tests/test_library_view.cjs
 ```
+
+Testy signálů údržby jsou součástí Python sady. Testy vzájemného `flock` zámku se na Windows přeskakují; před nasazením je spusťte také na Linuxu.
 
 Integrační testy s reálnými videi potřebují `ffmpeg` a `ffprobe` na PATH; pokud chybí, jsou označeny jako přeskočené. Testovací média se generují výhradně v dočasné složce.

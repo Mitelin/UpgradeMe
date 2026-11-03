@@ -60,7 +60,10 @@ class InventoryTests(unittest.TestCase):
         self.scan(); self.assertEqual(len(self.calls), 2)
 
     def test_mtime_change_is_probed_even_if_size_is_same(self):
-        p = self.video(); self.scan(); stat = p.stat()
+        p = self.video(); stat = p.stat()
+        # Keep both mtimes in the past, outside the recently-modified guard.
+        os.utime(p, ns=(stat.st_atime_ns, stat.st_mtime_ns - 10_000_000_000))
+        self.scan(); stat = p.stat()
         os.utime(p, ns=(stat.st_atime_ns, stat.st_mtime_ns + 10_000_000))
         self.scan(); self.assertEqual(len(self.calls), 2)
 

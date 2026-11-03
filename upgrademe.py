@@ -78,7 +78,14 @@ def probe_video(path, executable):
 
 
 class Inventory:
-    def __init__(self, data_dir, ffprobe='ffprobe', probe=None, settle_seconds=120):
+    def __init__(self, data_dir, ffprobe='ffprobe', probe=None, settle_seconds=120,
+                 maintenance_trigger=None, shared_scan_lock=None):
+        if maintenance_trigger and not shared_scan_lock:
+            raise ValueError('Režim údržby vyžaduje společný zámek skenu.')
+        if shared_scan_lock and os.name != 'posix':
+            raise ValueError('Společný zámek údržby vyžaduje POSIX systém (Linux).')
+        self.maintenance_trigger = Path(maintenance_trigger) if maintenance_trigger else None
+        self.shared_scan_lock = Path(shared_scan_lock) if shared_scan_lock else None
         self.data_dir = Path(data_dir)
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.db_path = self.data_dir / 'upgrademe.sqlite3'
@@ -240,37 +247,62 @@ class Inventory:
         upcoming = now.replace(hour=5, minute=0, second=0, microsecond=0)
         if now >= upcoming:
             upcoming += timedelta(days=1)
-        return {'active': active, 'last': last, 'next_scan': upcoming.isoformat(),
+        return {'active': active, 'last': last,
+                'schedule_mode': 'maintenance' if self.maintenance_trigger else 'daily',
+                'next_scan': None if self.maintenance_trigger else upcoming.isoformat(),
                 'timezone': time.tzname, 'ffprobe_available': shutil.which(self.ffprobe) is not None,
                 'roots': self.roots()}
 
-    def start_scan(self, retry_errors=False, background=True):
+    def start_scan(self, retry_errors=False, background=True, trigger_id=None):
         if not self.scan_lock.acquire(blocking=False):
             return False
         with self.state_lock:
             self.active = {'phase': 'Příprava', 'seen': 0, 'probed': 0, 'cached': 0,
                            'deferred': 0, 'errors': 0, 'current': ''}
         if background:
-            self.worker = threading.Thread(target=self._scan, args=(retry_errors,), daemon=True)
+            self.worker = threading.Thread(target=self._scan, args=(retry_errors, trigger_id), daemon=True)
             self.worker.start()
         else:
-            self._scan(retry_errors)
+            self._scan(retry_errors, trigger_id)
         return True
 
     def _progress(self, stats, **extra):
         with self.state_lock:
             self.active = {**stats, **extra}
 
-    def _scan(self, retry_errors):
+    def _acquire_shared_lock(self, stats):
+        if not self.shared_scan_lock:
+            return None
+        import fcntl
+        handle = self.shared_scan_lock.open('a+b')
+        acquired = False
+        try:
+            while not self.stop.is_set():
+                try:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    acquired = True
+                    self._progress(stats, phase='Příprava', current='')
+                    return handle
+                except BlockingIOError:
+                    self._progress(stats, phase='Čekání na dokončení Media Maintenance', current='')
+                    self.stop.wait(0.5)
+            raise InterruptedError('Čekání na údržbu bylo přerušeno při ukončení aplikace.')
+        finally:
+            if not acquired:
+                handle.close()
+
+    def _scan(self, retry_errors, trigger_id=None):
         stats = dict(seen=0, probed=0, cached=0, deferred=0, errors=0, removed=0)
         warnings = []
         run_id = None
+        shared_handle = None
         status = 'complete'
         started = time.monotonic()
         try:
             with self.db() as db:
                 run_id = db.execute('INSERT INTO runs(started,status) VALUES(?,?)',
                                     (stamp(), 'running')).lastrowid
+            shared_handle = self._acquire_shared_lock(stats)
             if self.probe is probe_video and not shutil.which(self.ffprobe):
                 raise ValueError('ffprobe nebyl nalezen. Nainstalujte FFmpeg nebo nastavte --ffprobe.')
             for root in self.roots():
@@ -373,13 +405,21 @@ class Inventory:
                     with self.db() as db:
                         db.execute('UPDATE runs SET finished=?,status=?,result=? WHERE id=?',
                                    (stamp(), status, json.dumps(stats, ensure_ascii=False), run_id))
+                        if trigger_id and status != 'interrupted':
+                            db.execute(
+                                "INSERT INTO settings VALUES('maintenance_event',?) "
+                                "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (trigger_id,))
             finally:
+                if shared_handle is not None:
+                    shared_handle.close()
                 with self.state_lock:
                     self.active = None
                 self.scan_lock.release()
             LOG.info('Scan %s: %s', status, stats)
 
     def schedule_tick(self, now=None):
+        if self.maintenance_trigger:
+            return self._maintenance_tick()
         now = now or datetime.now().astimezone()
         if now.hour < 5 or not self.roots():
             return False
@@ -393,6 +433,21 @@ class Inventory:
         with self.db() as db:
             db.execute("INSERT INTO settings VALUES('scheduled_day',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (day,))
         return True
+
+    def _maintenance_tick(self):
+        if not self.roots():
+            return False
+        try:
+            event = json.loads(self.maintenance_trigger.read_text(encoding='utf-8'))
+        except FileNotFoundError:
+            return False
+        if not isinstance(event, dict) or not isinstance(event.get('id'), str) or not event['id'].strip():
+            raise ValueError('Neplatný signál dokončení Media Maintenance: chybí identifikátor běhu.')
+        with self.db() as db:
+            last = db.execute("SELECT value FROM settings WHERE key='maintenance_event'").fetchone()
+        if last and last[0] == event['id']:
+            return False
+        return self.start_scan(trigger_id=event['id'])
 
     def scheduler(self):
         while not self.stop.is_set():
@@ -523,13 +578,22 @@ def main():
     parser.add_argument('--data-dir', default=str(Path(__file__).parent / 'runtime'))
     parser.add_argument('--ffprobe', default='ffprobe')
     parser.add_argument('--allowed-host', action='append', default=[])
+    parser.add_argument('--maintenance-trigger', help='JSON completion event; replaces the daily 05:00 schedule')
+    parser.add_argument('--shared-scan-lock', help='Shared POSIX flock file used by scans and maintenance')
     args = parser.parse_args()
+    if args.maintenance_trigger and not args.shared_scan_lock:
+        parser.error('--maintenance-trigger requires --shared-scan-lock')
+    if args.shared_scan_lock and os.name != 'posix':
+        parser.error('--shared-scan-lock requires a POSIX system (Linux)')
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
     with process_lock(args.data_dir):
-        inventory = Inventory(args.data_dir, args.ffprobe)
+        inventory = Inventory(args.data_dir, args.ffprobe,
+                              maintenance_trigger=args.maintenance_trigger,
+                              shared_scan_lock=args.shared_scan_lock)
         server = Server((args.host, args.port), inventory, args.allowed_host)
         threading.Thread(target=inventory.scheduler, daemon=True).start()
-        LOG.info('UpgradeMe: http://%s:%s — daily scan at 05:00 (%s)', args.host, args.port, time.tzname)
+        LOG.info('UpgradeMe: http://%s:%s — %s', args.host, args.port,
+                 'after Media Maintenance' if args.maintenance_trigger else f'daily scan at 05:00 ({time.tzname})')
         try:
             server.serve_forever()
         except KeyboardInterrupt:

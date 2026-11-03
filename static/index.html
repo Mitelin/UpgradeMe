@@ -13,7 +13,7 @@
 <article><span id="quality-label">SD VIDEA K UPGRADU</span><strong id="count-low">—</strong><small id="count-visible">Čeká na první sken</small></article>
 <article><span>VIDEA S VÝJIMKOU</span><strong id="count-excluded">—</strong><small>Vaše rozhodnutí, uložená s poznámkou</small></article>
 <article><span>CELKEM V KNIHOVNĚ</span><strong id="count-total">—</strong><small id="count-roots">Žádné sledované složky</small></article>
-<article><span>DALŠÍ AUTOMATICKÝ SKEN</span><strong class="time">05:00</strong><small id="next">Každý den podle času serveru</small></article>
+<article><span>DALŠÍ AUTOMATICKÝ SKEN</span><strong id="next-time" class="time">—</strong><small id="next">Načítání rozvrhu…</small></article>
 </section>
 <section class="scan-status" aria-live="polite"><span id="status-dot" class="dot"></span><div><strong id="status-title">Načítání stavu…</strong><p id="status-detail">Při opakovaném skenu se analyzují jen nové a změněné soubory.</p><p id="current" hidden></p></div><span id="scan-time"></span></section>
 <section class="panel library">
@@ -28,7 +28,7 @@
 <div class="bottom-grid">
 <section class="panel"><div class="panel-head"><div><h2>Sledované složky</h2><p>Cesty jsou vždy na serveru, kde UpgradeMe běží.</p></div><span class="icon-label">⌁</span></div><div id="roots"></div>
 <div class="root-actions"><button id="add-folder" class="primary" type="button">+ Přidat složku</button><p class="hint">Otevře prohlížeč složek serveru. Složku vyberete kliknutím.</p></div></section>
-<section class="panel"><div class="panel-head"><div><h2>Jak probíhá kontrola</h2><p>Malá zátěž, přehledná historie.</p></div><span class="icon-label">◷</span></div><ol class="steps"><li><span>01</span><div><strong>Každý den v 5:00</strong><p>Po pozdějším startu aplikace se zmeškaný denní sken doplní.</p></div></li><li><span>02</span><div><strong>Znovu jen změněná videa</strong><p>Porovná se velikost a čas změny. Rozlišení ostatních videí už známe z cache.</p></div></li><li><span>03</span><div><strong>Vaše média zůstávají na místě</strong><p>Aplikace čte rozlišení. Výjimky a poznámky ukládá do vlastní databáze.</p></div></li></ol></section>
+<section class="panel"><div class="panel-head"><div><h2>Jak probíhá kontrola</h2><p>Malá zátěž, přehledná historie.</p></div><span class="icon-label">◷</span></div><ol class="steps"><li><span>01</span><div><strong id="schedule-title">Automatická kontrola</strong><p id="schedule-detail">Načítání rozvrhu ze serveru.</p></div></li><li><span>02</span><div><strong>Znovu jen změněná videa</strong><p>Porovná se velikost a čas změny. Rozlišení ostatních videí už známe z cache.</p></div></li><li><span>03</span><div><strong>Vaše média zůstávají na místě</strong><p>Aplikace čte rozlišení. Výjimky a poznámky ukládá do vlastní databáze.</p></div></li></ol></section>
 </div>
 <details class="panel registry"><summary>Správa všech výjimek <span id="exception-count" class="badge">0</span></summary><p class="hint">Výjimka na složku zahrnuje i podsložky a budoucí soubory. Její zrušení je znovu zobrazí; samostatné výjimky souborů zůstávají.</p><div id="exceptions"></div></details>
 <details id="errors-panel" class="panel registry" hidden><summary>Upozornění a neověřená videa <span id="error-count" class="badge"></span></summary><p class="hint">Neověřená videa nejsou započítaná mezi videa k upgradu. Nezměněné chybné soubory se automaticky znovu nečtou.</p><button id="retry" class="quiet">Zopakovat i chybné soubory</button><div id="errors"></div></details>

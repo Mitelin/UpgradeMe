@@ -343,7 +343,15 @@ function renderStatus(s) {
   status = s;
   renderRootFilter(s.roots);
   $('count-roots').textContent = counted(s.roots.length, 'sledovaná složka', 'sledované složky', 'sledovaných složek');
-  $('next').textContent = s.next_scan.slice(0, 10).split('-').reverse().join('.') + ' · čas serveru (' + s.next_scan.slice(-6) + ')';
+  const afterMaintenance = s.schedule_mode === 'maintenance';
+  $('next-time').textContent = afterMaintenance ? 'Po údržbě' : '05:00';
+  $('next-time').classList.toggle('after-maintenance', afterMaintenance);
+  $('next').textContent = afterMaintenance ? 'Po Media Maintenance, i po běhu s chybou' :
+    s.next_scan.slice(0, 10).split('-').reverse().join('.') + ' · čas serveru (' + s.next_scan.slice(-6) + ')';
+  $('schedule-title').textContent = afterMaintenance ? 'Po dokončení Media Maintenance' : 'Každý den v 5:00';
+  $('schedule-detail').textContent = afterMaintenance ?
+    'Automatický i ruční sken počká na uvolnění společného zámku údržby. Na samostatný Jellyfin refresh se nečeká.' :
+    'Po pozdějším startu aplikace se zmeškaný denní sken doplní.';
   $('scan').disabled = $('retry').disabled = scanPending || !!s.active || !s.roots.length || !s.ffprobe_available;
   $('scan').textContent = scanPending ? 'Spouštění skenu…' : s.active ? 'Sken probíhá…' : '↻ Skenovat nyní';
   $('scan').title = !s.roots.length ? 'Nejprve přidejte sledovanou složku.' : !s.ffprobe_available ? 'Na serveru chybí ffprobe.' : '';
