@@ -19,6 +19,10 @@ input[type=checkbox]{min-height:16px;flex-shrink:0}
 .filter-actions{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:0 24px 16px;color:var(--muted);font-size:11px}
 .filter-actions button{font-size:12px;flex-shrink:0}
 .empty button{margin-top:18px}
+.table-head,.file-row,.group-row{grid-template-columns:minmax(0,1fr) 110px 80px 130px 145px}
+.table-head .search-heading{text-align:right}
+.group-row .exception-cell{align-self:end}
+.group-row>.folder-search{align-self:end;justify-self:end}
 .group-row:hover{background:#202c3b}
 .file-row:hover{background:#18212d}
 .path,.group-meta,.size,.exception-status,.hint{font-size:12px}
@@ -48,6 +52,9 @@ dialog[aria-busy=true]{cursor:progress}
 @media(max-width:1050px){
   .subfilters{align-items:flex-start;gap:6px}
 }
+@media(min-width:651px) and (max-width:950px){
+  .table-head,.file-row,.group-row{grid-template-columns:minmax(0,1fr) 85px 60px 110px 145px;gap:10px}
+}
 @media(max-width:650px){
   .scan-actions{margin-top:22px}
   .hero .scan-actions button{margin-top:0;flex:1 1 140px;width:auto;white-space:normal}
@@ -68,6 +75,11 @@ dialog[aria-busy=true]{cursor:progress}
   .root-row,.record{align-items:flex-start}
   .file-row,.group-row{grid-template-columns:minmax(0,1fr) 120px}
   .group-row .exception-cell button{max-width:120px}
+  .group-row>.resolution{grid-column:1;grid-row:2}
+  .group-row>.size{grid-column:2;grid-row:2;justify-self:end}
+  .group-row .exception-cell{grid-column:1;grid-row:3;align-items:flex-start;min-width:0}
+  .group-row .exception-cell button{max-width:100%}
+  .group-row>.folder-search{grid-column:2;grid-row:3}
   .folder-search{min-height:44px;max-width:120px}
   dialog{padding:18px}
   #folder-dialog .form-line>label{white-space:normal}

@@ -228,8 +228,7 @@ function render() {
     search.setAttribute('aria-label', 'Hledat na SKTorrentu: ' + e.name + ' (nová karta)');
     search.title = 'Vyhledat „' + e.name + '“ v nové kartě';
     search.addEventListener('click', event => event.stopPropagation());
-    exceptionCell.append(search);
-    summary.append(title, resolution, node('span', bytes(e.size), 'size'), exceptionCell);
+    summary.append(title, resolution, node('span', bytes(e.size), 'size'), exceptionCell, search);
     details.append(summary);
     e.files.sort(compare).forEach(f => details.append(row(f)));
     details.addEventListener('toggle', () => {
