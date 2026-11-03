@@ -62,7 +62,7 @@ let library = {files: [], exceptions: [], total: 0};
 let status = null, page = 0, lastVersion = null, targets = [];
 let folderState = null, folderRequest = 0, folderBusy = false;
 let libraryLoadedAt = 0;
-let libraryReady = false, libraryDirty = true, libraryRequest = 0, scanPending = false;
+let libraryReady = false, libraryDirty = true, libraryRequest = 0, scanPending = false, stopPending = false;
 let exceptionOpener = null;
 let sortDirection = 'asc';
 // null follows all current and future roots; [] deliberately shows none.
@@ -353,9 +353,12 @@ function renderStatus(s) {
     'Automatický i ruční sken počká na uvolnění společného zámku údržby. Na samostatný Jellyfin refresh se nečeká.' :
     'Po pozdějším startu aplikace se zmeškaný denní sken doplní.';
   $('scan').disabled = $('retry').disabled = scanPending || !!s.active || !s.roots.length || !s.ffprobe_available;
-  $('scan').textContent = scanPending ? 'Spouštění skenu…' : s.active ? 'Sken probíhá…' : '↻ Skenovat nyní';
+  $('scan').textContent = scanPending ? 'Spouštění skenu…' : '↻ Skenovat nyní';
+  $('stop-scan').disabled = stopPending || !s.active || !!s.active.stopping || !!s.active.finishing;
+  $('stop-scan').textContent = stopPending || s.active?.stopping ? 'Zastavování…' : 'Zastavit sken';
+  $('stop-scan').title = s.active ? 'Zastaví pouze sken UpgradeMe. Údržba a web zůstanou běžet.' : 'Právě neprobíhá žádný sken.';
   $('scan').title = !s.roots.length ? 'Nejprve přidejte sledovanou složku.' : !s.ffprobe_available ? 'Na serveru chybí ffprobe.' : '';
-  const labels = {complete: 'Sken dokončen', warning: 'Sken dokončen s upozorněním', failed: 'Sken se nezdařil', interrupted: 'Předchozí sken byl přerušen', running: 'Sken probíhá'};
+  const labels = {complete: 'Sken dokončen', warning: 'Sken dokončen s upozorněním', failed: 'Sken se nezdařil', interrupted: 'Předchozí sken byl přerušen', cancelled: 'Sken zastaven uživatelem', running: 'Sken probíhá'};
   const current = s.active, last = s.last?.result;
   $('status-title').textContent = current ? 'Sken probíhá · ' + current.phase : s.last ? (labels[s.last.status] || s.last.status) : 'Připraveno na první sken';
   $('status-dot').className = 'dot' + (current ? ' busy' : ['warning', 'failed', 'interrupted'].includes(s.last?.status) ? ' warning' : '');
@@ -450,6 +453,16 @@ async function startScan(retry_errors = false) {
   finally { scanPending = false; renderStatus(status); }
 }
 $('scan').addEventListener('click', () => startScan().catch(showError));
+async function stopScan() {
+  if (stopPending || !status?.active || status.active.stopping || status.active.finishing) return;
+  stopPending = true; renderStatus(status);
+  try {
+    await api('scan/stop', {});
+    feedback('Požadavek na zastavení byl přijat. Průběžné výsledky zůstanou uložené.');
+    await refresh(true);
+  } finally { stopPending = false; renderStatus(status); }
+}
+$('stop-scan').addEventListener('click', () => stopScan().catch(showError));
 $('retry').addEventListener('click', () => startScan(true).catch(showError));
 function openFolderDialog() {
   $('root-kind').value = 'auto'; $('folder-dialog').showModal(); browseFolder();

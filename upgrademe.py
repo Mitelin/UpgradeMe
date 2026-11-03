@@ -59,15 +59,44 @@ def group_for(path, root, kind):
     return str(base.joinpath(*parts[:season_index]) if season_index is not None else p.parent)
 
 
-def probe_video(path, executable):
+class ScanCancelled(Exception):
+    pass
+
+
+def _probe_output(command, check_cancelled=None):
+    if check_cancelled:
+        check_cancelled()
+    with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                          encoding='utf-8', errors='replace',
+                          creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0)) as process:
+        deadline = time.monotonic() + 45
+        try:
+            while True:
+                if check_cancelled:
+                    check_cancelled()
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise subprocess.TimeoutExpired(command, 45)
+                try:
+                    stdout, stderr = process.communicate(timeout=min(0.2, remaining))
+                    break
+                except subprocess.TimeoutExpired:
+                    continue
+            if check_cancelled:
+                check_cancelled()
+            if process.returncode:
+                raise ValueError((stderr.strip() or 'ffprobe selhal')[:1200])
+            return stdout
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.communicate()
+
+
+def probe_video(path, executable, check_cancelled=None):
     command = [executable, '-v', 'error', '-show_entries',
                'stream=codec_type,width,height:stream_disposition=attached_pic', '-of', 'json', path]
-    result = subprocess.run(command, capture_output=True, text=True, encoding='utf-8',
-                            errors='replace', timeout=45, check=False,
-                            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
-    if result.returncode:
-        raise ValueError((result.stderr.strip() or 'ffprobe selhal')[:1200])
-    streams = json.loads(result.stdout).get('streams', [])
+    streams = json.loads(_probe_output(command, check_cancelled)).get('streams', [])
     videos = [s for s in streams if s.get('codec_type') == 'video'
               and not s.get('disposition', {}).get('attached_pic')
               and int(s.get('width', 0)) > 0 and int(s.get('height', 0)) > 0]
@@ -95,6 +124,7 @@ class Inventory:
         self.scan_lock = threading.Lock()
         self.state_lock = threading.Lock()
         self.stop = threading.Event()
+        self.scan_cancel = threading.Event()
         self.active = None
         self.worker = None
         with self.db() as db:
@@ -257,8 +287,9 @@ class Inventory:
         if not self.scan_lock.acquire(blocking=False):
             return False
         with self.state_lock:
+            self.scan_cancel.clear()
             self.active = {'phase': 'Příprava', 'seen': 0, 'probed': 0, 'cached': 0,
-                           'deferred': 0, 'errors': 0, 'current': ''}
+                           'deferred': 0, 'errors': 0, 'current': '', 'stopping': False}
         if background:
             self.worker = threading.Thread(target=self._scan, args=(retry_errors, trigger_id), daemon=True)
             self.worker.start()
@@ -266,9 +297,25 @@ class Inventory:
             self._scan(retry_errors, trigger_id)
         return True
 
+    def cancel_scan(self):
+        with self.state_lock:
+            if self.active is None or self.active.get('finishing'):
+                return False
+            self.scan_cancel.set()
+            self.active.update(stopping=True, phase='Zastavování skenu')
+        return True
+
+    def _check_cancelled(self):
+        if self.scan_cancel.is_set():
+            raise ScanCancelled('Sken byl zastaven uživatelem.')
+        if self.stop.is_set():
+            raise InterruptedError('Sken byl zastaven při ukončení aplikace.')
+
     def _progress(self, stats, **extra):
         with self.state_lock:
-            self.active = {**stats, **extra}
+            self.active = {**stats, **extra, 'stopping': self.scan_cancel.is_set()}
+            if self.scan_cancel.is_set():
+                self.active['phase'] = 'Zastavování skenu'
 
     def _acquire_shared_lock(self, stats):
         if not self.shared_scan_lock:
@@ -277,7 +324,8 @@ class Inventory:
         handle = self.shared_scan_lock.open('a+b')
         acquired = False
         try:
-            while not self.stop.is_set():
+            while True:
+                self._check_cancelled()
                 try:
                     fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
                     acquired = True
@@ -285,8 +333,7 @@ class Inventory:
                     return handle
                 except BlockingIOError:
                     self._progress(stats, phase='Čekání na dokončení Media Maintenance', current='')
-                    self.stop.wait(0.5)
-            raise InterruptedError('Čekání na údržbu bylo přerušeno při ukončení aplikace.')
+                    self.scan_cancel.wait(0.5)
         finally:
             if not acquired:
                 handle.close()
@@ -296,6 +343,7 @@ class Inventory:
         warnings = []
         run_id = None
         shared_handle = None
+        flush_pending = None
         status = 'complete'
         started = time.monotonic()
         try:
@@ -303,11 +351,11 @@ class Inventory:
                 run_id = db.execute('INSERT INTO runs(started,status) VALUES(?,?)',
                                     (stamp(), 'running')).lastrowid
             shared_handle = self._acquire_shared_lock(stats)
+            self._check_cancelled()
             if self.probe is probe_video and not shutil.which(self.ffprobe):
                 raise ValueError('ffprobe nebyl nalezen. Nainstalujte FFmpeg nebo nastavte --ffprobe.')
             for root in self.roots():
-                if self.stop.is_set():
-                    raise InterruptedError('Sken byl zastaven při ukončení aplikace.')
+                self._check_cancelled()
                 # Never prune a root after a failed/incomplete traversal (e.g. disconnected NAS).
                 walk_errors = []
                 if not Path(root['path']).is_dir():
@@ -332,12 +380,13 @@ class Inventory:
                     pending.clear()
                     last_flush = time.monotonic()
 
+                flush_pending = flush
                 for directory, dirs, names in os.walk(root['path'], followlinks=False, onerror=walk_errors.append):
+                    self._check_cancelled()
                     dirs[:] = [d for d in dirs if d.lower() not in IGNORED_DIRS
                                and not Path(directory, d).is_symlink()]
                     for name in names:
-                        if self.stop.is_set():
-                            raise InterruptedError('Sken byl zastaven při ukončení aplikace.')
+                        self._check_cancelled()
                         p = Path(directory, name)
                         if p.suffix.lower() not in VIDEO_EXTENSIONS or p.is_symlink():
                             continue
@@ -361,10 +410,16 @@ class Inventory:
                                 try:
                                     stats['probed'] += 1
                                     # Use the spelling returned by the filesystem, not the normalized cache key.
-                                    width, height = self.probe(str(p), self.ffprobe)
+                                    if self.probe is probe_video:
+                                        width, height = self.probe(str(p), self.ffprobe, self._check_cancelled)
+                                    else:
+                                        width, height = self.probe(str(p), self.ffprobe)
+                                    self._check_cancelled()
                                     after = p.stat()
                                     if signature != (after.st_size, after.st_mtime_ns):
                                         raise ValueError('Soubor se během analýzy změnil; kontrola při dalším skenu.')
+                                except (ScanCancelled, InterruptedError):
+                                    raise
                                 except (OSError, ValueError, subprocess.SubprocessError) as exc:
                                     error = str(exc)[:1200]
                                     width = height = None
@@ -373,10 +428,13 @@ class Inventory:
                                     if 'během analýzy' in error:
                                         signature = (-1, -1)
                                 pending.append((path, root['id'], *signature, width, height, error, run_id))
+                        except (ScanCancelled, InterruptedError):
+                            raise
                         except OSError as exc:
                             walk_errors.append(exc)
                             stats['errors'] += 1
                         if len(pending) >= 200 or time.monotonic() - last_flush >= 2:
+                            self._check_cancelled()
                             flush()
                         self._progress(stats, phase='Procházení složek', current=path)
                 flush()
@@ -389,16 +447,29 @@ class Inventory:
                     with self.db() as db:
                         stats['removed'] += db.execute('DELETE FROM files WHERE root_id=? AND seen_run<>?',
                                                        (root['id'], run_id)).rowcount
+            self._check_cancelled()
             if warnings or stats['errors'] or stats['deferred']:
                 status = 'warning'
-        except InterruptedError as exc:
-            status = 'interrupted'
+        except (ScanCancelled, InterruptedError) as exc:
+            status = 'cancelled' if isinstance(exc, ScanCancelled) else 'interrupted'
             warnings.append(str(exc))
+            if flush_pending:
+                try:
+                    flush_pending()
+                except sqlite3.Error as error:
+                    status = 'failed'
+                    warnings.append('Nelze uložit průběžné výsledky: ' + str(error))
+                    LOG.exception('Saving partial scan results failed')
         except Exception as exc:
             status = 'failed'
             warnings.append(str(exc))
             LOG.exception('Scan failed')
         finally:
+            with self.state_lock:
+                self.active['finishing'] = True
+                if self.scan_cancel.is_set() and status in ('complete', 'warning'):
+                    status = 'cancelled'
+                    warnings.append('Sken byl zastaven uživatelem.')
             stats.update(warnings=warnings, seconds=round(time.monotonic() - started, 2))
             try:
                 if run_id is not None:
@@ -525,6 +596,9 @@ def handler_for(inventory):
                         raise ValueError('Nejprve přidejte sledovanou složku.')
                     if not inventory.start_scan(bool(data.get('retry_errors', False))):
                         return self.send(409, {'error': 'Sken již běží.'})
+                elif route == '/api/scan/stop':
+                    if not inventory.cancel_scan():
+                        return self.send(409, {'error': 'Sken už neběží nebo právě dokončuje ukládání.'})
                 else:
                     return self.send(404, {'error': 'Nenalezeno.'})
                 self.send(200, {'ok': True})

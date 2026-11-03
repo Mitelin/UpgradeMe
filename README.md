@@ -18,6 +18,7 @@ Samostatný, pouze čtecí přehled kvality video knihovny. Python 3.10+ a `ffpr
 - Výjimky jsou vázané na cestu, přežijí restart i výměnu souboru na stejné cestě. Přejmenování je nepřenáší. Odebrání sledované složky smaže její cache, ale zachová výjimky.
 - Odebrání sledované složky vyžaduje potvrzení. Během ukládání jsou ovládací prvky dialogu dočasně zablokované proti opakovanému odeslání; při chybě zůstává poznámka zachovaná. Úspěšné uložení a případná následná chyba obnovení přehledu se oznamují odděleně.
 - Při výpadku spojení UI upozorní na možné zastaralé výsledky a automaticky opakuje načítání. Po obnovení spojení varování zmizí. Ruční sken nelze spustit bez sledované složky, bez `ffprobe` ani během jiného skenu.
+- Tlačítko **Skenovat nyní** spustí ruční sken bez čekání na další plánovaný běh (společný zámek údržby stále platí). **Zastavit sken** zruší aktuální sken i čekání na tento zámek a ukončí právě běžící ffprobe. Průběžné výsledky se uloží, neprohlédnutá cache ani média se nemažou. Web a plánování zůstávají běžet; po zastavení lze znovu kliknout na **Skenovat nyní**. Probíhající systémové čtení z nedostupného NAS může zastavení oddálit, dokud se toto čtení nevrátí.
 - Mobilní rozložení má větší dotykové ovládání a posuvné dialogy. Klávesnicový fokus v seznamu se zachovává při průběžném načítání výsledků i po zavření editoru výjimky.
 
 ## Spuštění
@@ -81,7 +82,7 @@ Web běží trvale, sken se spouští po skončení služby údržby **i při je
 
 4. `ExecStopPost` volá [notify_maintenance.py](deploy/notify_maintenance.py), který atomicky uloží identifikátor dokončeného běhu a `SERVICE_RESULT`. Funguje i při zastaveném webu UpgradeMe. Po `systemctl daemon-reload` zapněte UpgradeMe; kvůli instalaci není nutné spouštět skutečnou údržbu.
 
-Scheduler kontroluje signál po 20 sekundách. Každý dokončený běh vyvolá jeden pokus o sken; několik běhů během odstávky webu se sloučí do jednoho aktuálního skenu. Identifikátor se v databázi potvrdí až po skončení skenu, takže přerušený sken nebo čekání se po restartu zopakuje. Chybný signál se hlásí v logu a nesmí se potichu ignorovat.
+Scheduler kontroluje signál po 20 sekundách. Každý dokončený běh vyvolá jeden pokus o sken; několik běhů během odstávky webu se sloučí do jednoho aktuálního skenu. Identifikátor se v databázi potvrdí až po skončení skenu, takže sken přerušený ukončením aplikace se po restartu zopakuje. Výslovné zastavení tlačítkem **Zastavit sken** se naopak považuje za vyřízený pokus a stejný signál jej znovu nespustí; další běh údržby funguje normálně. Chybný signál se hlásí v logu a nesmí se potichu ignorovat.
 
 Automatický **i ruční** sken drží stejný OS zámek po celou dobu práce. Pokud běží údržba, UI oznámí čekání; pokud skenuje UpgradeMe, údržba počká. Existující timeout maintenance služby se nemění a zahrnuje i toto čekání. Přímé spuštění jejího skriptu mimo systemd drop-in zámek obchází, proto používejte časovač nebo stávající tlačítko Media Maintenance.
 

@@ -5,6 +5,7 @@
 .root-filter{display:flex;align-items:center;flex-wrap:wrap;gap:10px;padding:16px 24px 0}#root-filter-label{font-size:11px;color:var(--muted);margin-right:4px}#root-filter-options{display:contents}.root-filter-chip{display:flex;align-items:center;gap:8px;padding:8px 11px;border:1px solid var(--line);border-radius:8px;font-size:12px;cursor:pointer;max-width:100%;overflow-wrap:anywhere}.root-filter-chip:hover{background:#202937}.root-filter-chip:has(input:checked){background:#233122;border-color:#587547;color:var(--accent)}.root-filter-chip input{flex-shrink:0}#root-filter-summary{font-size:11px;color:var(--muted);margin-left:auto}@media(max-width:650px){.root-filter{padding-left:16px;padding-right:16px}#root-filter-label{flex-basis:100%}#root-filter-summary{flex-basis:100%;margin-left:0}}
 
 body{line-height:1.5}
+.scan-actions{display:flex;gap:10px;flex-wrap:wrap;justify-content:flex-end}
 button,input,select{min-height:40px}
 input[type=checkbox]{min-height:16px;flex-shrink:0}
 .panel-head>div,.metrics article{min-width:0}
@@ -46,6 +47,8 @@ dialog[aria-busy=true]{cursor:progress}
   .subfilters{align-items:flex-start;gap:6px}
 }
 @media(max-width:650px){
+  .scan-actions{margin-top:22px}
+  .hero .scan-actions button{margin-top:0;flex:1 1 140px;width:auto;white-space:normal}
   button,input,select{min-height:44px}
   input[type=checkbox]{min-height:16px}
   .check,.root-filter-chip{min-height:44px}

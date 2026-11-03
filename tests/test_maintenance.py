@@ -43,6 +43,28 @@ class MaintenanceFixture(unittest.TestCase):
 
 
 class MaintenanceScheduleTests(MaintenanceFixture):
+    def test_user_stop_consumes_current_event_but_not_future_maintenance(self):
+        notify(self.trigger)
+
+        def cancel(path, executable):
+            self.inventory.cancel_scan()
+            return 640, 360
+
+        self.inventory.probe = cancel
+        self.assertTrue(self.inventory.schedule_tick())
+        self.finish_worker()
+        self.assertEqual(self.inventory.status()['last']['status'], 'cancelled')
+        self.assertFalse(self.inventory.stop.is_set())
+        self.assertFalse(self.inventory.schedule_tick())
+        restarted = Inventory(self.base / 'data', probe=lambda path, exe: (640, 360),
+                              settle_seconds=0)
+        restarted.maintenance_trigger = self.trigger
+        self.assertFalse(restarted.schedule_tick())
+        notify(self.trigger)
+        self.assertTrue(restarted.schedule_tick())
+        restarted.worker.join(timeout=5)
+        self.assertEqual(restarted.status()['last']['status'], 'complete')
+
     def test_no_event_means_no_daily_scan_and_status_has_no_clock_schedule(self):
         self.assertFalse(self.inventory.schedule_tick())
         self.assertIsNone(self.inventory.status()['next_scan'])
@@ -144,6 +166,23 @@ class SharedLockTests(MaintenanceFixture):
         self.assertTrue(self.probed.is_set())
         self.assertEqual(self.inventory.status()['last']['status'], 'complete')
         self.assertFalse(self.inventory.schedule_tick())
+
+    def test_user_stop_cancels_wait_without_stopping_maintenance_or_scheduler(self):
+        import fcntl
+        with self.lock.open('a+b') as maintenance:
+            fcntl.flock(maintenance, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            notify(self.trigger)
+            self.assertTrue(self.inventory.schedule_tick())
+            self.wait_until_waiting()
+            self.assertTrue(self.inventory.cancel_scan())
+            self.finish_worker()
+            self.assertFalse(self.probed.is_set())
+            self.assertFalse(self.inventory.stop.is_set())
+            self.assertEqual(self.inventory.status()['last']['status'], 'cancelled')
+            self.assertFalse(self.inventory.schedule_tick())
+            with self.lock.open('a+b') as contender:
+                with self.assertRaises(BlockingIOError):
+                    fcntl.flock(contender, fcntl.LOCK_EX | fcntl.LOCK_NB)
 
     def test_manual_scan_holds_lock_and_releases_it_after_probing(self):
         import fcntl
