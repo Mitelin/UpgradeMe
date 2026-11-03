@@ -144,6 +144,8 @@ class Inventory:
                 CREATE TABLE IF NOT EXISTS exceptions (
                     path TEXT NOT NULL, scope TEXT NOT NULL, note TEXT NOT NULL,
                     PRIMARY KEY(path, scope));
+                CREATE TABLE IF NOT EXISTS folder_priorities (
+                    path TEXT PRIMARY KEY, priority INTEGER NOT NULL CHECK(priority > 0));
                 CREATE TABLE IF NOT EXISTS runs (
                     id INTEGER PRIMARY KEY, started TEXT NOT NULL,
                     finished TEXT, status TEXT NOT NULL, result TEXT);
@@ -246,6 +248,27 @@ class Inventory:
                 db.execute('INSERT INTO exceptions VALUES(?,?,?) ON CONFLICT(path,scope) '
                            'DO UPDATE SET note=excluded.note', (path, scope, note.strip()))
 
+    def adjust_priority(self, path, delta):
+        path = canonical(path)
+        if type(delta) is not int or delta not in (-1, 1):
+            raise ValueError('Změna priority musí být +1 nebo -1.')
+        with self.db() as db:
+            db.execute('BEGIN IMMEDIATE')
+            if not any(within(path, root['path']) for root in db.execute('SELECT path FROM roots')):
+                raise ValueError('Priorita musí patřit do sledované složky.')
+            row = db.execute('SELECT priority FROM folder_priorities WHERE path=?', (path,)).fetchone()
+            priority = (row['priority'] if row else 0) + delta
+            if not 0 <= priority <= 9007199254740991:
+                raise ValueError('Priorita musí být nezáporné bezpečně reprezentovatelné celé číslo.')
+            if priority == 0:
+                db.execute('DELETE FROM folder_priorities WHERE path=?', (path,))
+            else:
+                db.execute('INSERT INTO folder_priorities VALUES(?,?) ON CONFLICT(path) '
+                           'DO UPDATE SET priority=excluded.priority', (path, priority))
+            db.execute("INSERT INTO settings VALUES('priority_revision','1') ON CONFLICT(key) "
+                       "DO UPDATE SET value=CAST(value AS INTEGER)+1")
+        return priority
+
     def listing(self):
         with self.db() as db:
             roots = {r['id']: dict(r) for r in db.execute('SELECT * FROM roots')}
@@ -267,7 +290,8 @@ class Inventory:
                             group=group_for(path, root['path'], root['kind']), exception=excluded)
                 files.append(item)
             total = db.execute('SELECT count(*) FROM files').fetchone()[0]
-        return {'files': files, 'exceptions': exceptions, 'total': total}
+            priorities = {row['path']: row['priority'] for row in db.execute('SELECT * FROM folder_priorities')}
+        return {'files': files, 'exceptions': exceptions, 'total': total, 'priorities': priorities}
 
     def status(self):
         with self.state_lock:
@@ -277,11 +301,13 @@ class Inventory:
             last = dict(row) if row else None
             if last and last['result']:
                 last['result'] = json.loads(last['result'])
+            revision = db.execute("SELECT value FROM settings WHERE key='priority_revision'").fetchone()
         now = datetime.now().astimezone()
         upcoming = now.replace(hour=5, minute=0, second=0, microsecond=0)
         if now >= upcoming:
             upcoming += timedelta(days=1)
         return {'active': active, 'last': last, 'instance_id': self.instance_id,
+                'priority_revision': int(revision['value']) if revision else 0,
                 'update': self.update_status(),
                 'schedule_mode': 'maintenance' if self.maintenance_trigger else 'daily',
                 'next_scan': None if self.maintenance_trigger else upcoming.isoformat(),
@@ -624,6 +650,9 @@ def handler_for(inventory):
                     inventory.exception(data['path'], data['scope'], data.get('note', ''))
                 elif route == '/api/exceptions/delete':
                     inventory.exception(data['path'], data['scope'], delete=True)
+                elif route == '/api/priorities/adjust':
+                    priority = inventory.adjust_priority(data['path'], data['delta'])
+                    return self.send(200, {'ok': True, 'priority': priority})
                 elif route == '/api/scan':
                     if not inventory.roots():
                         raise ValueError('Nejprve přidejte sledovanou složku.')

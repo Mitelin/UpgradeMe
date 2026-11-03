@@ -33,6 +33,41 @@ function file(path, height=576, size=100, exception=null, group=null, width=720)
 }
 function sorted(items, column, direction) { return [...items].sort((a,b)=>compareEntries(a,b,column,direction)); }
 
+test('default priorities preserve existing ordering; larger numbers always go last', () => {
+  const rows = [file('/media/A/a.mkv', 480, 300), file('/media/B/b.mkv', 576, 100),
+    file('/media/C/c.mkv', 360, 200)];
+  const priorities = {'/media/A': 1, '/media/C': 2};
+  const groups = buildGroups(rows, priorities);
+  assert.deepEqual(groups.map(g => g.priority), [1, 0, 2]);
+  for (const column of ['name', 'quality', 'size', 'exception']) {
+    for (const direction of ['asc', 'desc']) {
+      assert.deepEqual(sorted(groups, column, direction).map(g => g.name), ['B', 'A', 'C']);
+    }
+  }
+  assert.deepEqual(sorted(buildGroups(rows), 'name', 'desc').map(g => g.name), ['C', 'B', 'A']);
+  assert.deepEqual(sorted(buildGroups(rows, {'/media/A': 0}), 'name', 'asc').map(g => g.name), ['A', 'B', 'C']);
+});
+test('equal priorities use the chosen sorting and episodes are not reordered by folder priority', () => {
+  const rows = [file('/media/Show/Season 1/a.mkv', 480, 300, null, '/media/Show'),
+    file('/media/Show/Season 2/b.mkv', 576, 100, null, '/media/Show')];
+  const groups = buildGroups(rows, {'/media/Show': 2, '/media/Show/Season 1': 8});
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].priority, 2);
+  assert.deepEqual(sorted(groups[0].files, 'size', 'desc').map(f => f.size), [300, 100]);
+  const equal = buildGroups([file('/media/A/a.mkv', 576, 100), file('/media/B/b.mkv', 480, 300)],
+    {'/media/A': 1, '/media/B': 1});
+  assert.deepEqual(sorted(equal, 'size', 'desc').map(g => g.name), ['B', 'A']);
+});
+test('deferring a folder moves it beyond the first page without losing its priority under filters', () => {
+  const rows = Array.from({length:61}, (_, i) => file('/media/Film ' + i + '/video.mkv'));
+  const priorities = {'/media/Film 0': 1};
+  const groups = sorted(buildGroups(rows, priorities), 'name', 'asc');
+  assert.equal(groups[60].name, 'Film 0');
+  assert.equal(groups.slice(0, 60).some(g => g.name === 'Film 0'), false);
+  assert.equal(buildGroups(rows.slice(0, 1), priorities)[0].priority, 1);
+  assert.equal(rows[0].priority, undefined);
+});
+
 test('root filter supports all, none, one and multiple exact roots',()=>{
   const rows = ['/media/filmy','/media/serialy','/media/filmy extra'].map((root,i)=>({...file(root+'/video.mkv'),root,size:i+1}));
   assert.equal(filterByRoots(rows,null).length,3);

@@ -22,14 +22,14 @@ function isBelowThreshold(file, height, includeCropped = false) {
 function counted(count, one, few, many) {
   return count.toLocaleString('cs') + ' ' + (count === 1 ? one : count >= 2 && count <= 4 ? few : many);
 }
-function buildGroups(files) {
+function buildGroups(files, priorities = {}) {
   const groups = new Map();
   for (const file of files) {
     const path = file.group || parentFolder(file.path);
     if (!groups.has(path)) groups.set(path, {
       path, root: file.root, name: path.split(/[\\/]/).filter(Boolean).pop() || path,
       files: [], size: 0, height: Infinity, width: Infinity, maxHeight: 0,
-      maxWidth: 0, exceptionCount: 0, isSeries: false
+      maxWidth: 0, exceptionCount: 0, isSeries: false, priority: priorities[path] ?? 0
     });
     const group = groups.get(path);
     group.files.push(file); group.size += file.size;
@@ -47,6 +47,8 @@ function exceptionRank(item) {
   return item.exceptionCount === 0 ? 0 : item.exceptionCount === item.files.length ? 2 : 1;
 }
 function compareEntries(a, b, column = 'name', direction = 'asc') {
+  const priorityDifference = (a.priority ?? 0) - (b.priority ?? 0);
+  if (a.files && b.files && priorityDifference) return priorityDifference;
   let result = 0;
   if (column === 'quality') result = a.height - b.height || a.width - b.width;
   if (column === 'size') result = a.size - b.size;
@@ -82,6 +84,7 @@ try {
   if (Array.isArray(savedRoots) && savedRoots.every(path => typeof path === 'string')) selectedRoots = savedRoots;
 } catch (_) {}
 const opened = new Set();
+const priorityPending = new Set();
 const pageSize = 60;
 
 function node(tag, text, className) {
@@ -181,7 +184,7 @@ function render() {
   $('count-excluded').textContent = allLow.filter(f => f.exception).length.toLocaleString('cs');
   $('count-total').textContent = library.total.toLocaleString('cs');
   $('result-count').textContent = files.length.toLocaleString('cs');
-  const entries = buildGroups(files);
+  const entries = buildGroups(files, library.priorities);
   entries.sort(compare);
   const pages = Math.max(1, Math.ceil(entries.length / pageSize)); page = Math.min(page, pages - 1);
   const results = $('results'); results.replaceChildren();
@@ -228,7 +231,22 @@ function render() {
     search.setAttribute('aria-label', 'Hledat na SKTorrentu: ' + e.name + ' (nová karta)');
     search.title = 'Vyhledat „' + e.name + '“ v nové kartě';
     search.addEventListener('click', event => event.stopPropagation());
-    summary.append(title, resolution, node('span', bytes(e.size), 'size'), exceptionCell, search);
+    const priority = node('div', undefined, 'priority-control');
+    priority.setAttribute('role', 'group');
+    priority.setAttribute('aria-label', 'Priorita složky: ' + e.name);
+    const value = node('output', String(e.priority), 'priority-value');
+    value.setAttribute('aria-label', 'Priorita: ' + e.priority);
+    const arrows = node('div', undefined, 'priority-arrows');
+    for (const [delta, symbol, label] of [[-1, '↑', 'Posunout dopředu'], [1, '↓', 'Odložit na později']]) {
+      const arrow = button(symbol, () => adjustPriority(e.path, delta));
+      arrow.dataset.focusKey = 'priority:' + delta + ':' + e.path;
+      arrow.setAttribute('aria-label', label + ': ' + e.name);
+      arrow.title = label + (delta === 1 ? ' (zvýšit číslo priority)' : ' (snížit číslo priority)');
+      arrow.disabled = priorityPending.has(e.path) || (delta === -1 ? e.priority === 0 : e.priority === Number.MAX_SAFE_INTEGER);
+      arrows.append(arrow);
+    }
+    priority.append(value, arrows);
+    summary.append(title, resolution, node('span', bytes(e.size), 'size'), exceptionCell, search, priority);
     details.append(summary);
     e.files.sort(compare).forEach(f => details.append(row(f)));
     details.addEventListener('toggle', () => {
@@ -244,8 +262,22 @@ function render() {
   updateSortHeaders(); updateExpandButton(); renderExceptions(); renderErrors();
   if (focusKey) {
     const replacement = [...document.querySelectorAll('[data-focus-key]')].find(el => el.dataset.focusKey === focusKey);
-    (replacement || results).focus({preventScroll: true});
+    (replacement && !replacement.disabled ? replacement : results).focus({preventScroll: true});
   }
+}
+async function adjustPriority(path, delta) {
+  if (priorityPending.has(path)) return;
+  priorityPending.add(path); render();
+  try {
+    const result = await api('priorities/adjust', {path, delta});
+    libraryRequest++;
+    library.priorities = {...library.priorities, [path]: result.priority};
+    libraryDirty = true;
+    render();
+    feedback('Priorita složky „' + basename(path) + '“ je ' + result.priority + '. Nižší číslo se zobrazuje dříve.');
+    try { await refresh(true); }
+    catch (error) { showError(new Error('Priorita je uložená, ale přehled se nepodařilo obnovit: ' + error.message)); }
+  } finally { priorityPending.delete(path); render(); }
 }
 function updateExpandButton() {
   const series = [...document.querySelectorAll('.series')];
@@ -476,7 +508,7 @@ function renderFolders() {
 }
 async function refresh(force = false) {
   const s = await api('status'); renderStatus(s);
-  const version = JSON.stringify([s.last?.id, s.last?.finished, s.roots]);
+  const version = JSON.stringify([s.last?.id, s.last?.finished, s.roots, s.priority_revision]);
   if (force || libraryDirty || version !== lastVersion || (s.active && Date.now() - libraryLoadedAt >= 5000)) {
     await loadLibrary(); lastVersion = version;
   }

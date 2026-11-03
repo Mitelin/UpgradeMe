@@ -19,8 +19,8 @@ input[type=checkbox]{min-height:16px;flex-shrink:0}
 .filter-actions{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:0 24px 16px;color:var(--muted);font-size:11px}
 .filter-actions button{font-size:12px;flex-shrink:0}
 .empty button{margin-top:18px}
-.table-head,.file-row,.group-row{grid-template-columns:minmax(0,1fr) 110px 80px 130px 145px}
-.table-head .search-heading{text-align:right}
+.table-head,.file-row,.group-row{grid-template-columns:minmax(0,1fr) 110px 80px 130px 145px 72px}
+.table-head .search-heading,.table-head .priority-heading{text-align:right}
 .group-row .exception-cell{align-self:end}
 .group-row>.folder-search{align-self:end;justify-self:end}
 .group-row:hover{background:#202c3b}
@@ -30,6 +30,10 @@ input[type=checkbox]{min-height:16px;flex-shrink:0}
 .group-row .resolution{font-size:12px}
 .folder-search{display:inline-flex;align-items:center;justify-content:center;min-height:40px;padding:8px 10px;border:1px solid var(--line);border-radius:9px;color:var(--blue);font-size:11px;font-weight:600;text-align:center;text-decoration:none}
 .folder-search:hover{background:#303e50}
+.priority-control{display:flex;align-items:center;justify-self:end;align-self:end;gap:6px;min-width:0}
+.priority-value{font-size:12px;font-variant-numeric:tabular-nums;max-width:38px;overflow-wrap:anywhere;text-align:right}
+.priority-arrows{display:flex;flex-direction:column;gap:2px}
+.group-row .priority-arrows button{padding:0 6px;min-height:20px;min-width:28px;height:20px;border-radius:4px;line-height:1;font-size:12px}
 #notice{display:flex;align-items:center;justify-content:space-between;gap:12px;overflow-wrap:anywhere;position:sticky;top:12px;z-index:10}
 #notice-text{min-width:0}
 #notice button{flex-shrink:0}
@@ -53,7 +57,7 @@ dialog[aria-busy=true]{cursor:progress}
   .subfilters{align-items:flex-start;gap:6px}
 }
 @media(min-width:651px) and (max-width:950px){
-  .table-head,.file-row,.group-row{grid-template-columns:minmax(0,1fr) 85px 60px 110px 145px;gap:10px}
+  .table-head,.file-row,.group-row{grid-template-columns:minmax(0,1fr) 85px 60px 110px 145px 60px;gap:10px}
 }
 @media(max-width:650px){
   .scan-actions{margin-top:22px}
@@ -83,4 +87,20 @@ dialog[aria-busy=true]{cursor:progress}
   .folder-search{min-height:44px;max-width:120px}
   dialog{padding:18px}
   #folder-dialog .form-line>label{white-space:normal}
+}
+@media(max-width:850px){
+  .table-head{display:none}
+  .group-row,.file-row{grid-template-columns:minmax(0,1fr) 120px;gap:10px;padding:16px}
+  .group-title,.file-main{grid-column:1/-1}
+  .group-row>.resolution{grid-column:1;grid-row:2}
+  .group-row>.size{grid-column:2;grid-row:2;justify-self:end}
+  .file-row>.size{grid-column:1;grid-row:3}
+  .file-row>button{grid-column:2;grid-row:2/4}
+  .group-row .exception-cell{grid-column:1;grid-row:3;align-items:flex-start;min-width:0}
+  .group-row .exception-cell button{max-width:100%;white-space:normal}
+  .group-row>.folder-search{grid-column:2;grid-row:3;min-height:44px;max-width:120px}
+  .priority-control{grid-column:1/-1;grid-row:4}
+  .priority-control::before{content:'Priorita';color:var(--muted);font-size:12px}
+  .priority-arrows{flex-direction:row;gap:4px}
+  .group-row .priority-arrows button{min-width:44px;min-height:44px;height:44px}
 }
