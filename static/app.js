@@ -54,7 +54,13 @@ function compareEntries(a, b, column = 'name', direction = 'asc') {
   if (column === 'name') result = viewCollator.compare(a.name, b.name);
   return result * (direction === 'desc' ? -1 : 1) || viewCollator.compare(a.name, b.name) || viewCollator.compare(a.path, b.path);
 }
-if (typeof module !== 'undefined' && module.exports) module.exports = {parentFolder, buildGroups, compareEntries, filterByRoots, reconcileRootSelection, isBelowThreshold, counted};
+function scanButtonLabel(active, pending = false) {
+  if (active?.stopping) return 'Zastavování skenu…';
+  if (active?.finishing) return 'Dokončování skenu…';
+  if (active) return 'Sken probíhá…';
+  return pending ? 'Spouštění skenu…' : '↻ Skenovat nyní';
+}
+if (typeof module !== 'undefined' && module.exports) module.exports = {parentFolder, buildGroups, compareEntries, filterByRoots, reconcileRootSelection, isBelowThreshold, counted, scanButtonLabel};
 if (typeof document !== 'undefined') {
 const $ = id => document.getElementById(id);
 const collator = new Intl.Collator('cs', {numeric: true, sensitivity: 'base'});
@@ -64,6 +70,7 @@ let folderState = null, folderRequest = 0, folderBusy = false;
 let libraryLoadedAt = 0;
 let libraryReady = false, libraryDirty = true, libraryRequest = 0, scanPending = false, stopPending = false;
 let exceptionOpener = null;
+let updatePending = false, updateWatching = false, loadedInstance = null;
 let sortDirection = 'asc';
 // null follows all current and future roots; [] deliberately shows none.
 let selectedRoots = null, rootFilterVersion = null;
@@ -352,12 +359,30 @@ function renderStatus(s) {
   $('schedule-detail').textContent = afterMaintenance ?
     'Automatický i ruční sken počká na uvolnění společného zámku údržby. Na samostatný Jellyfin refresh se nečeká.' :
     'Po pozdějším startu aplikace se zmeškaný denní sken doplní.';
-  $('scan').disabled = $('retry').disabled = scanPending || !!s.active || !s.roots.length || !s.ffprobe_available;
-  $('scan').textContent = scanPending ? 'Spouštění skenu…' : '↻ Skenovat nyní';
+  const updating = updatePending || !!s.update?.busy;
+  $('scan').disabled = $('retry').disabled = updating || scanPending || !!s.active || !s.roots.length || !s.ffprobe_available;
+  $('scan').textContent = scanButtonLabel(s.active, scanPending);
   $('stop-scan').disabled = stopPending || !s.active || !!s.active.stopping || !!s.active.finishing;
   $('stop-scan').textContent = stopPending || s.active?.stopping ? 'Zastavování…' : 'Zastavit sken';
   $('stop-scan').title = s.active ? 'Zastaví pouze sken UpgradeMe. Údržba a web zůstanou běžet.' : 'Právě neprobíhá žádný sken.';
   $('scan').title = !s.roots.length ? 'Nejprve přidejte sledovanou složku.' : !s.ffprobe_available ? 'Na serveru chybí ffprobe.' : '';
+  $('update-app').disabled = updating || scanPending || !!s.active || !s.update?.enabled;
+  $('update-app').textContent = updating ? 'Aktualizace probíhá…' : 'Aktualizovat aplikaci';
+  $('update-app').title = s.active ? 'Nejprve dokončete nebo zastavte sken.' :
+    !s.update?.enabled ? 'Aktualizační služba není na serveru nastavená.' : 'Stáhne main z Gitu a restartuje UpgradeMe.';
+  const updateLabels = {fetching: 'Stahování aktualizace…', waiting: 'Čekání na dokončení Media Maintenance…',
+    installing: 'Zálohování a instalace…', restarting: 'Restart aplikace…',
+    complete: 'Aplikace byla aktualizována a restartována.', failed: 'Aktualizace se nezdařila.'};
+  const result = s.update?.result;
+  $('update-detail').textContent = updating && ['complete', 'failed', undefined].includes(result?.status) ?
+    'Čekání na aktualizační službu…' : (updateLabels[result?.status] || '') +
+    (result?.error ? ' ' + result.error : '') + (result?.revision ? ' Verze: ' + result.revision.slice(0, 7) : '');
+  $('update-detail').className = result?.status === 'failed' && !updating ? 'inline-error' : 'hint';
+  loadedInstance ??= s.instance_id;
+  if (s.update?.busy) updateWatching = true;
+  if (updateWatching && !updating && result?.status === 'complete' && loadedInstance !== s.instance_id) {
+    location.reload();
+  }
   const labels = {complete: 'Sken dokončen', warning: 'Sken dokončen s upozorněním', failed: 'Sken se nezdařil', interrupted: 'Předchozí sken byl přerušen', cancelled: 'Sken zastaven uživatelem', running: 'Sken probíhá'};
   const current = s.active, last = s.last?.result;
   $('status-title').textContent = current ? 'Sken probíhá · ' + current.phase : s.last ? (labels[s.last.status] || s.last.status) : 'Připraveno na první sken';
@@ -447,7 +472,7 @@ async function refresh(force = false) {
   }
 }
 async function startScan(retry_errors = false) {
-  if (!status || scanPending || status.active || !status.roots.length || !status.ffprobe_available) return;
+  if (!status || scanPending || updatePending || status.update?.busy || status.active || !status.roots.length || !status.ffprobe_available) return;
   scanPending = true; renderStatus(status);
   try { await api('scan', {retry_errors}); feedback('Sken byl spuštěn. Výsledky se aktualizují automaticky.'); await refresh(true); }
   finally { scanPending = false; renderStatus(status); }
@@ -463,6 +488,18 @@ async function stopScan() {
   } finally { stopPending = false; renderStatus(status); }
 }
 $('stop-scan').addEventListener('click', () => stopScan().catch(showError));
+async function updateApp() {
+  if (!status?.update?.enabled || status.active || scanPending || updatePending || status.update.busy) return;
+  if (!confirm('Stáhnout aktuální main z Gitu a restartovat UpgradeMe? Nastavení a výsledky zůstanou zachované.')) return;
+  updatePending = true; renderStatus(status);
+  try {
+    await api('update', {});
+    updateWatching = true;
+    feedback('Aktualizace byla vyžádána. Při restartu se spojení krátce přeruší; stránka se pak obnoví.');
+    await refresh();
+  } finally { updatePending = false; renderStatus(status); }
+}
+$('update-app').addEventListener('click', () => updateApp().catch(showError));
 $('retry').addEventListener('click', () => startScan(true).catch(showError));
 function openFolderDialog() {
   $('root-kind').value = 'auto'; $('folder-dialog').showModal(); browseFolder();

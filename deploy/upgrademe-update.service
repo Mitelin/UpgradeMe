@@ -1,0 +1,11 @@
+[Unit]
+Description=Update and restart UpgradeMe
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/
+ExecStart=/usr/bin/python3 -I /usr/local/libexec/upgrademe-update.py --user upgrademe
+TimeoutStartSec=15min
+UMask=0022

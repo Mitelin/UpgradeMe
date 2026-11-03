@@ -19,6 +19,8 @@ Samostatný, pouze čtecí přehled kvality video knihovny. Python 3.10+ a `ffpr
 - Odebrání sledované složky vyžaduje potvrzení. Během ukládání jsou ovládací prvky dialogu dočasně zablokované proti opakovanému odeslání; při chybě zůstává poznámka zachovaná. Úspěšné uložení a případná následná chyba obnovení přehledu se oznamují odděleně.
 - Při výpadku spojení UI upozorní na možné zastaralé výsledky a automaticky opakuje načítání. Po obnovení spojení varování zmizí. Ruční sken nelze spustit bez sledované složky, bez `ffprobe` ani během jiného skenu.
 - Tlačítko **Skenovat nyní** spustí ruční sken bez čekání na další plánovaný běh (společný zámek údržby stále platí). **Zastavit sken** zruší aktuální sken i čekání na tento zámek a ukončí právě běžící ffprobe. Průběžné výsledky se uloží, neprohlédnutá cache ani média se nemažou. Web a plánování zůstávají běžet; po zastavení lze znovu kliknout na **Skenovat nyní**. Probíhající systémové čtení z nedostupného NAS může zastavení oddálit, dokud se toto čtení nevrátí.
+- Během ručního i automatického skenu se text tlačítka změní na **Sken probíhá…**, při zastavování a ukládání na odpovídající stav.
+- **Aktualizovat aplikaci** po potvrzení stáhne `origin/main` a restartuje web. Během skenu je zakázané; nejprve sken dokončete nebo zastavte. Vyžaduje jednorázovou instalaci aktualizační služby popsanou níže.
 - Mobilní rozložení má větší dotykové ovládání a posuvné dialogy. Klávesnicový fokus v seznamu se zachovává při průběžném načítání výsledků i po zavření editoru výjimky.
 
 ## Spuštění
@@ -87,6 +89,45 @@ Scheduler kontroluje signál po 20 sekundách. Každý dokončený běh vyvolá 
 Automatický **i ruční** sken drží stejný OS zámek po celou dobu práce. Pokud běží údržba, UI oznámí čekání; pokud skenuje UpgradeMe, údržba počká. Existující timeout maintenance služby se nemění a zahrnuje i toto čekání. Přímé spuštění jejího skriptu mimo systemd drop-in zámek obchází, proto používejte časovač nebo stávající tlačítko Media Maintenance.
 
 Na homepage lze přidat běžný odkaz na port 5066 a `siteMonitor` na LAN adresu. Odkaz není autentizace; službu zpřístupňujte jen v důvěryhodné LAN / VPN.
+
+### Aktualizace z webu (Linux/systemd)
+
+Aktualizace je volitelná. Web sám nemá sudo oprávnění ani právo přepisovat svůj kód.
+Pouze vytvoří požadavek v datovém adresáři; samostatná systemd služba provede
+fast-forward čisté větve `main`, zálohu SQLite do `/var/backups` a restart.
+Git a kontrola syntaxe běží pod neprivilegovaným účtem aplikace. Instalujte pouze
+důvěryhodné revize z nastaveného `origin`; přístup k tomuto tlačítku mají všichni
+uživatelé povolené LAN/VPN stejně jako k ostatnímu ovládání.
+
+1. Nainstalujte **rootem vlastněnou kopii** [update_app.py](deploy/update_app.py)
+   do `/usr/local/libexec/upgrademe-update.py` (root:root, 0755).
+   Nespouštějte tento privilegovaný pomocný program přímo z uživatelsky zapisovatelného Git checkoutu.
+2. Nainstalujte [upgrademe-update.service](deploy/upgrademe-update.service) a
+   [upgrademe-update.path](deploy/upgrademe-update.path) do `/etc/systemd/system/`.
+   V `ExecStart` nastavte `--user` na vlastníka checkoutu (na media serveru `mitelin`).
+   Při jiných cestách/portu nastavte také `--repo`, `--data-dir`, `--port`
+   a odpovídající `PathExists`.
+3. V datovém adresáři musí existovat soubor `media-maintenance.lock`, zapisovatelný
+   pro účet aplikace. Existující soubor nemažte ani nenahrazujte.
+4. Do drop-in služby `upgrademe.service` přidejte
+   `Environment=UPGRADEME_ENABLE_UPDATES=1` v sekci `[Service]`.
+   Proveďte `systemctl daemon-reload`, `systemctl enable --now upgrademe-update.path`
+   a restartujte UpgradeMe, když neběží sken.
+
+Požadavek na aktualizaci blokuje nové ruční i plánované skeny a změny přes API,
+i přes restart aplikace. Aktualizátor čeká až pět minut na společný zámek
+Media Maintenance; při překročení limitu ohlásí chybu a lze jej spustit znovu.
+Existující údržbu nepřerušuje. Nastavení, výjimky a cache se při aktualizaci nemění.
+Po restartu UI automaticky obnoví stránku. I při aktuální revizi proběhne restart.
+Lokální změny, jiná větev a ne-fast-forward historie aktualizaci zablokují.
+Při chybě instalace se obnoví předchozí kód pomocí `git reset --keep` a služba se
+znovu spustí; databáze se automaticky nevrací ze zálohy. Chyby jsou viditelné v UI
+a v `journalctl -u upgrademe-update.service`. Při selhání návratu je nutný zásah správce.
+
+Privilegovaný pomocník a systemd jednotky se z webu samy nepřepisují.
+Jejich případné změny vyžadují novou instalaci správcem. Po násilném ukončení
+aktualizátoru zkontrolujte journal a stav služby před ručním odstraněním
+osiřelého `update.request`.
 
 ## Data a testy
 

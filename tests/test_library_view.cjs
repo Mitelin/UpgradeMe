@@ -1,6 +1,14 @@
 const {test} = require('node:test');
 const assert = require('node:assert/strict');
-const {parentFolder, buildGroups, compareEntries, filterByRoots, reconcileRootSelection, isBelowThreshold, counted} = require('../static/app.js');
+const {parentFolder, buildGroups, compareEntries, filterByRoots, reconcileRootSelection, isBelowThreshold, counted, scanButtonLabel} = require('../static/app.js');
+test('scan label follows active scans, including scheduled runs and stopping', () => {
+  assert.equal(scanButtonLabel(null), '↻ Skenovat nyní');
+  assert.equal(scanButtonLabel(null, true), 'Spouštění skenu…');
+  assert.equal(scanButtonLabel({phase: 'scan'}), 'Sken probíhá…');
+  assert.equal(scanButtonLabel({phase: 'waiting'}, true), 'Sken probíhá…');
+  assert.equal(scanButtonLabel({stopping: true}), 'Zastavování skenu…');
+  assert.equal(scanButtonLabel({finishing: true}), 'Dokončování skenu…');
+});
 function file(path, height=576, size=100, exception=null, group=null, width=720) {
   return {path, name:path.split('/').pop(), root:'/media', height, width, size, exception, group};
 }

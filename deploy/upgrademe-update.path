@@ -1,0 +1,9 @@
+[Unit]
+Description=Watch for UpgradeMe update requests
+
+[Path]
+PathExists=/var/lib/upgrademe/update.request
+Unit=upgrademe-update.service
+
+[Install]
+WantedBy=multi-user.target

@@ -15,6 +15,7 @@ import sqlite3
 import subprocess
 import threading
 import time
+import uuid
 from urllib.parse import urlsplit
 
 VIDEO_EXTENSIONS = {'.mkv', '.mp4', '.avi', '.mov', '.wmv', '.m4v', '.ts', '.m2ts',
@@ -108,7 +109,7 @@ def probe_video(path, executable, check_cancelled=None):
 
 class Inventory:
     def __init__(self, data_dir, ffprobe='ffprobe', probe=None, settle_seconds=120,
-                 maintenance_trigger=None, shared_scan_lock=None):
+                 maintenance_trigger=None, shared_scan_lock=None, enable_updates=False):
         if maintenance_trigger and not shared_scan_lock:
             raise ValueError('Režim údržby vyžaduje společný zámek skenu.')
         if shared_scan_lock and os.name != 'posix':
@@ -117,6 +118,9 @@ class Inventory:
         self.shared_scan_lock = Path(shared_scan_lock) if shared_scan_lock else None
         self.data_dir = Path(data_dir)
         self.data_dir.mkdir(parents=True, exist_ok=True)
+        self.enable_updates = enable_updates
+        self.update_request = self.data_dir / 'update.request'
+        self.instance_id = uuid.uuid4().hex
         self.db_path = self.data_dir / 'upgrademe.sqlite3'
         self.ffprobe = ffprobe
         self.probe = probe or probe_video
@@ -277,14 +281,41 @@ class Inventory:
         upcoming = now.replace(hour=5, minute=0, second=0, microsecond=0)
         if now >= upcoming:
             upcoming += timedelta(days=1)
-        return {'active': active, 'last': last,
+        return {'active': active, 'last': last, 'instance_id': self.instance_id,
+                'update': self.update_status(),
                 'schedule_mode': 'maintenance' if self.maintenance_trigger else 'daily',
                 'next_scan': None if self.maintenance_trigger else upcoming.isoformat(),
                 'timezone': time.tzname, 'ffprobe_available': shutil.which(self.ffprobe) is not None,
                 'roots': self.roots()}
 
+    def update_status(self):
+        result_file = self.data_dir / 'update-status.json'
+        try:
+            result = json.loads(result_file.read_text(encoding='utf-8'))
+        except FileNotFoundError:
+            result = None
+        return {'enabled': self.enable_updates, 'busy': self.update_request.exists(),
+                'result': result}
+
+    def request_update(self):
+        if not self.enable_updates:
+            raise ValueError('Aktualizace na tomto serveru nejsou nastavené.')
+        if not self.scan_lock.acquire(blocking=False):
+            return False
+        try:
+            try:
+                self.update_request.touch(exist_ok=False)
+            except FileExistsError:
+                return False
+            return True
+        finally:
+            self.scan_lock.release()
+
     def start_scan(self, retry_errors=False, background=True, trigger_id=None):
         if not self.scan_lock.acquire(blocking=False):
+            return False
+        if self.enable_updates and self.update_request.exists():
+            self.scan_lock.release()
             return False
         with self.state_lock:
             self.scan_cancel.clear()
@@ -581,6 +612,8 @@ def handler_for(inventory):
                 if not isinstance(data, dict):
                     raise ValueError('Neplatný požadavek.')
                 route = urlsplit(self.path).path
+                if inventory.enable_updates and inventory.update_request.exists():
+                    return self.send(409, {'error': 'Probíhá aktualizace aplikace. Počkejte na dokončení.'})
                 if route == '/api/folders/list':
                     return self.send(200, inventory.browse_folders(data.get('path')))
                 elif route == '/api/roots/add':
@@ -599,6 +632,11 @@ def handler_for(inventory):
                 elif route == '/api/scan/stop':
                     if not inventory.cancel_scan():
                         return self.send(409, {'error': 'Sken už neběží nebo právě dokončuje ukládání.'})
+                elif route == '/api/update':
+                    if not inventory.enable_updates:
+                        return self.send(503, {'error': 'Aktualizace na tomto serveru nejsou nastavené.'})
+                    if not inventory.request_update():
+                        return self.send(409, {'error': 'Běží sken nebo aktualizace. Nejprve zastavte sken.'})
                 else:
                     return self.send(404, {'error': 'Nenalezeno.'})
                 self.send(200, {'ok': True})
@@ -654,16 +692,21 @@ def main():
     parser.add_argument('--allowed-host', action='append', default=[])
     parser.add_argument('--maintenance-trigger', help='JSON completion event; replaces the daily 05:00 schedule')
     parser.add_argument('--shared-scan-lock', help='Shared POSIX flock file used by scans and maintenance')
+    parser.add_argument('--enable-updates', action='store_true',
+                        default=os.environ.get('UPGRADEME_ENABLE_UPDATES') == '1',
+                        help='Enable the separately installed systemd update service')
     args = parser.parse_args()
     if args.maintenance_trigger and not args.shared_scan_lock:
         parser.error('--maintenance-trigger requires --shared-scan-lock')
     if args.shared_scan_lock and os.name != 'posix':
         parser.error('--shared-scan-lock requires a POSIX system (Linux)')
+    if args.enable_updates and os.name != 'posix':
+        parser.error('--enable-updates requires the Linux/systemd updater')
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
     with process_lock(args.data_dir):
         inventory = Inventory(args.data_dir, args.ffprobe,
                               maintenance_trigger=args.maintenance_trigger,
-                              shared_scan_lock=args.shared_scan_lock)
+                              shared_scan_lock=args.shared_scan_lock, enable_updates=args.enable_updates)
         server = Server((args.host, args.port), inventory, args.allowed_host)
         threading.Thread(target=inventory.scheduler, daemon=True).start()
         LOG.info('UpgradeMe: http://%s:%s — %s', args.host, args.port,
